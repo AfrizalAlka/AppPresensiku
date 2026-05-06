@@ -2,6 +2,7 @@
 
 import json
 import random
+import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -204,6 +205,11 @@ def train_model(
 	logs_dir.mkdir(parents=True, exist_ok=True)
 	model_path.parent.mkdir(parents=True, exist_ok=True)
 	class_names_path.parent.mkdir(parents=True, exist_ok=True)
+
+	# Clean old model files before training
+	for file in model_path.parent.glob("*"):
+		if file.is_file():
+			file.unlink()
 
 	callbacks = [
 		tf.keras.callbacks.EarlyStopping(monitor="val_accuracy", mode="max", patience=5, restore_best_weights=True),
