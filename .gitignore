@@ -51,3 +51,7 @@ build/
 
 *.md
 sas.sql
+SQL_INSERT_USERS_STUDENTS.sql
+*.ps1
+
+attendance_pictures/

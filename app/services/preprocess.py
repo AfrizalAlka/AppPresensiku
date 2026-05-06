@@ -105,7 +105,9 @@ def preprocess_dataset(
 	if not class_dirs:
 		raise RuntimeError("Dataset raw tidak memiliki subfolder kelas.")
 
-	if output_dir.exists() and overwrite:
+	# Always remove old preprocessed dataset to ensure clean data
+	# This prevents mixing old and new preprocessed images
+	if output_dir.exists():
 		shutil.rmtree(output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
 
