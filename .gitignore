@@ -48,3 +48,6 @@ build/
 
 # Jupyter notebooks checkpoints
 .ipynb_checkpoints/
+
+*.md
+sas.sql

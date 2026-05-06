@@ -3,6 +3,8 @@
 import cv2
 import numpy as np
 from flask import Flask, jsonify, request
+from pathlib import Path
+from datetime import datetime
 
 from config import AppConfig
 from database import Database, DatabaseError
@@ -27,6 +29,28 @@ def _decode_uploaded_image() -> np.ndarray:
 	return frame
 
 
+def _save_attendance_picture(frame: np.ndarray, config: AppConfig) -> str:
+	"""Save attendance picture to disk and return filename.
+	
+	Args:
+	- frame: OpenCV image (BGR)
+	- config: App configuration
+	
+	Returns: Filename (e.g., 'attendance_pictures/2026-02-05_14-30-45_123.jpg')
+	"""
+	picture_dir = config.project_root / "attendance_pictures"
+	picture_dir.mkdir(exist_ok=True)
+	
+	timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+	filename = f"{timestamp}.jpg"
+	filepath = picture_dir / filename
+	
+	cv2.imwrite(str(filepath), frame)
+	
+	# Return relative path for database storage
+	return f"attendance_pictures/{filename}"
+
+
 def _read_pipeline_options(config: AppConfig) -> dict:
 	"""Collect pipeline options from the request body."""
 	payload = request.get_json(silent=True) or {}
@@ -48,7 +72,8 @@ def create_app() -> Flask:
 	config = AppConfig.from_env()
 
 	db = Database(config)
-	db.init_schema_if_needed()
+	# Note: Database schema already exists in Laravel database
+	# No need to call db.init_schema_if_needed()
 
 	predictor = FacePredictor(
 		model_path=config.model_path,
@@ -117,10 +142,14 @@ def create_app() -> Flask:
 			}
 			return jsonify(unknown_response), 200
 
+		# Save the picture
+		picture_filename = _save_attendance_picture(frame, config)
+
 		attendance = attendance_service.mark_attendance(
 			recognized_name=prediction.recognized_name,
 			confidence=prediction.confidence,
 			source="upload",
+			picture_filename=picture_filename,
 		)
 
 		return jsonify(
@@ -129,8 +158,11 @@ def create_app() -> Flask:
 				"message": attendance.message,
 				"name": prediction.recognized_name,
 				"confidence": prediction.confidence,
+				"student_name": attendance.student_name,
 				"attendance_id": attendance.attendance_id,
 				"student_id": attendance.student_id,
+				"class_id": attendance.class_id,
+				"picture": picture_filename,
 			}
 		)
 
