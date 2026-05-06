@@ -1,6 +1,10 @@
+"""Flask app that exposes health, training, and attendance endpoints."""
+
 import cv2
 import numpy as np
 from flask import Flask, jsonify, request
+from pathlib import Path
+from datetime import datetime
 
 from config import AppConfig
 from database import Database, DatabaseError
@@ -12,6 +16,7 @@ from services.train_cnn import train_model
 
 
 def _decode_uploaded_image() -> np.ndarray:
+	"""Read the uploaded file and convert it into an OpenCV image."""
 	if "image" not in request.files:
 		raise ValueError("Field file 'image' wajib diisi.")
 
@@ -24,12 +29,51 @@ def _decode_uploaded_image() -> np.ndarray:
 	return frame
 
 
+def _save_attendance_picture(frame: np.ndarray, config: AppConfig) -> str:
+	"""Save attendance picture to disk and return filename.
+	
+	Args:
+	- frame: OpenCV image (BGR)
+	- config: App configuration
+	
+	Returns: Filename (e.g., 'attendance_pictures/2026-02-05_14-30-45_123.jpg')
+	"""
+	picture_dir = config.project_root / "attendance_pictures"
+	picture_dir.mkdir(exist_ok=True)
+	
+	timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+	filename = f"{timestamp}.jpg"
+	filepath = picture_dir / filename
+	
+	cv2.imwrite(str(filepath), frame)
+	
+	# Return relative path for database storage
+	return f"attendance_pictures/{filename}"
+
+
+def _read_pipeline_options(config: AppConfig) -> dict:
+	"""Collect pipeline options from the request body."""
+	payload = request.get_json(silent=True) or {}
+
+	return {
+		"run_preprocess": bool(payload.get("preprocess", True)),
+		"run_train": bool(payload.get("train", True)),
+		"overwrite": bool(payload.get("overwrite", False)),
+		"epochs": int(payload.get("epochs", config.epochs)),
+		"min_images": int(payload.get("min_images_per_class", config.min_images_per_class)),
+		"train_ratio": float(payload.get("train_ratio", config.train_ratio)),
+		"val_ratio": float(payload.get("val_ratio", config.val_ratio)),
+		"test_ratio": float(payload.get("test_ratio", config.test_ratio)),
+	}
+
+
 def create_app() -> Flask:
 	app = Flask(__name__)
 	config = AppConfig.from_env()
 
 	db = Database(config)
-	db.init_schema_if_needed()
+	# Note: Database schema already exists in Laravel database
+	# No need to call db.init_schema_if_needed()
 
 	predictor = FacePredictor(
 		model_path=config.model_path,
@@ -41,40 +85,29 @@ def create_app() -> Flask:
 
 	@app.get("/health")
 	def health():
-		return jsonify(
-			{
-				"status": "ok",
-				"model_exists": config.model_path.exists(),
-				"dataset_root": str(config.dataset_root),
-			}
-		)
+		status = {
+			"status": "ok",
+			"model_exists": config.model_path.exists(),
+			"dataset_root": str(config.dataset_root),
+		}
+		return jsonify(status)
 
 	@app.post("/pipeline/run")
 	def run_pipeline():
-		payload = request.get_json(silent=True) or {}
-
-		run_preprocess = bool(payload.get("preprocess", True))
-		run_train = bool(payload.get("train", True))
-		overwrite = bool(payload.get("overwrite", False))
-
-		epochs = int(payload.get("epochs", config.epochs))
-		min_images = int(payload.get("min_images_per_class", config.min_images_per_class))
-		train_ratio = float(payload.get("train_ratio", config.train_ratio))
-		val_ratio = float(payload.get("val_ratio", config.val_ratio))
-		test_ratio = float(payload.get("test_ratio", config.test_ratio))
+		options = _read_pipeline_options(config)
 
 		results = {}
-		if run_preprocess:
+		if options["run_preprocess"]:
 			results["preprocess"] = preprocess_dataset(
 				source_dir=config.raw_dir,
 				output_dir=config.preprocessed_dir,
 				target_size=config.image_size,
-				min_images_per_class=min_images,
+				min_images_per_class=options["min_images"],
 				seed=config.random_seed,
-				overwrite=overwrite,
+				overwrite=options["overwrite"],
 			)
 
-		if run_train:
+		if options["run_train"]:
 			results["train"] = train_model(
 				dataset_dir=config.preprocessed_dir,
 				model_path=config.model_path,
@@ -82,12 +115,12 @@ def create_app() -> Flask:
 				logs_dir=config.logs_dir,
 				image_size=config.image_size,
 				batch_size=config.batch_size,
-				epochs=epochs,
+				epochs=options["epochs"],
 				learning_rate=config.learning_rate,
 				seed=config.random_seed,
-				train_ratio=train_ratio,
-				val_ratio=val_ratio,
-				test_ratio=test_ratio,
+				train_ratio=options["train_ratio"],
+				val_ratio=options["val_ratio"],
+				test_ratio=options["test_ratio"],
 			)
 
 		return jsonify({"message": "pipeline selesai", "results": results})
@@ -101,19 +134,22 @@ def create_app() -> Flask:
 			return jsonify({"status": "no_face", "message": "Wajah tidak terdeteksi."}), 200
 
 		if prediction.confidence < config.threshold:
-			return jsonify(
-				{
-					"status": "unknown",
-					"name": prediction.recognized_name,
-					"confidence": prediction.confidence,
-					"message": "Prediksi di bawah threshold.",
-				}
-			), 200
+			unknown_response = {
+				"status": "unknown",
+				"name": prediction.recognized_name,
+				"confidence": prediction.confidence,
+				"message": "Prediksi di bawah threshold.",
+			}
+			return jsonify(unknown_response), 200
+
+		# Save the picture
+		picture_filename = _save_attendance_picture(frame, config)
 
 		attendance = attendance_service.mark_attendance(
 			recognized_name=prediction.recognized_name,
 			confidence=prediction.confidence,
 			source="upload",
+			picture_filename=picture_filename,
 		)
 
 		return jsonify(
@@ -122,8 +158,11 @@ def create_app() -> Flask:
 				"message": attendance.message,
 				"name": prediction.recognized_name,
 				"confidence": prediction.confidence,
+				"student_name": attendance.student_name,
 				"attendance_id": attendance.attendance_id,
 				"student_id": attendance.student_id,
+				"class_id": attendance.class_id,
+				"picture": picture_filename,
 			}
 		)
 
@@ -139,7 +178,7 @@ def create_app() -> Flask:
 
 	@app.get("/attendance/camera/status")
 	def camera_status():
-		state = camera_runner.state() 
+		state = camera_runner.state()
 		return jsonify(
 			{
 				"running": state.running,

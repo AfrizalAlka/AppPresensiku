@@ -2,6 +2,8 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Optional
+from datetime import datetime
+from pathlib import Path
 
 import cv2
 
@@ -54,6 +56,22 @@ class CameraAttendanceRunner:
             last_message=self._last_message,
         )
 
+    def _save_camera_frame(self, frame: cv2.Mat) -> str:
+        """Save camera frame to disk and return relative path.
+        
+        Returns: Relative path like 'attendance_pictures/camera_2026-02-05_14-30-45_123.jpg'
+        """
+        picture_dir = self.config.project_root / "attendance_pictures"
+        picture_dir.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+        filename = f"camera_{timestamp}.jpg"
+        filepath = picture_dir / filename
+        
+        cv2.imwrite(str(filepath), frame)
+        
+        return f"attendance_pictures/{filename}"
+
     def _run_loop(self) -> None:
         cap = cv2.VideoCapture(self.config.camera_id)
         if not cap.isOpened():
@@ -87,12 +105,17 @@ class CameraAttendanceRunner:
                 if now_ts - last_action_ts < self.config.camera_check_interval_sec:
                     continue
 
+                # Save the frame before marking attendance
+                picture_filename = self._save_camera_frame(frame)
+
                 result = self.attendance_service.mark_attendance(
                     recognized_name=prediction.recognized_name,
                     confidence=prediction.confidence,
                     source="camera",
+                    picture_filename=picture_filename,
                 )
                 self._last_message = result.message
                 last_action_ts = now_ts
         finally:
             cap.release()
+

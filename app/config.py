@@ -61,10 +61,11 @@ class AppConfig:
     db_user: str
     db_password: str
 
-    # Schema mapping
+    # Schema mapping (Laravel database)
     student_table: str
     student_id_column: str
     student_name_column: str
+    student_class_column: str
     attendance_table: str
 
     @staticmethod
@@ -98,11 +99,12 @@ class AppConfig:
             db_driver=os.getenv("DB_DRIVER", "mysql").strip().lower(),
             db_host=os.getenv("DB_HOST", "127.0.0.1"),
             db_port=_env_int("DB_PORT", 3306),
-            db_name=os.getenv("DB_NAME", "app_presensiku"),
+            db_name=os.getenv("DB_NAME", "sas"),
             db_user=os.getenv("DB_USER", "root"),
             db_password=os.getenv("DB_PASSWORD", ""),
             student_table=os.getenv("STUDENT_TABLE", "students"),
             student_id_column=os.getenv("STUDENT_ID_COLUMN", "id"),
             student_name_column=os.getenv("STUDENT_NAME_COLUMN", "name"),
-            attendance_table=os.getenv("ATTENDANCE_TABLE", "attendances"),
+            student_class_column=os.getenv("STUDENT_CLASS_COLUMN", "id_class"),
+            attendance_table=os.getenv("ATTENDANCE_TABLE", "attendance_history_dailys"),
         )
