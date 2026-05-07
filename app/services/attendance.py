@@ -19,6 +19,25 @@ class AttendanceService:
     def __init__(self, db: Database) -> None:
         self.db = db
 
+    def can_mark_attendance(self, recognized_name: str) -> tuple[bool, str, Optional[int], Optional[str]]:
+        """Check if a student can mark attendance today (not already attended).
+        
+        Returns: (can_attend, message, student_id, student_name)
+        """
+        student = self.db.find_student_by_name(recognized_name)
+        
+        if not student:
+            return False, f"Siswa '{recognized_name}' tidak ditemukan di database.", None, None
+
+        student_id = int(student["id"])
+        id_class = int(student["id_class"])
+        student_name = student["name"]
+
+        if self.db.has_attendance_today(student_id=student_id, id_class=id_class):
+            return False, "Absensi hari ini sudah tercatat untuk kelas ini.", student_id, student_name
+
+        return True, "Siswa bisa absensi.", student_id, student_name
+
     def mark_attendance(
         self,
         recognized_name: str,
