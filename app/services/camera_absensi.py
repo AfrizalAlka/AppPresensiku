@@ -101,11 +101,20 @@ class CameraAttendanceRunner:
                     self._last_message = "low confidence"
                     continue
 
+                # Check if student can mark attendance (not already attended today)
+                can_attend, check_message, student_id, student_name = self.attendance_service.can_mark_attendance(
+                    recognized_name=prediction.recognized_name
+                )
+                
+                if not can_attend:
+                    self._last_message = check_message
+                    continue
+
                 now_ts = time.time()
                 if now_ts - last_action_ts < self.config.camera_check_interval_sec:
                     continue
 
-                # Save the frame before marking attendance
+                # Save the frame only if eligibility check passed
                 picture_filename = self._save_camera_frame(frame)
 
                 result = self.attendance_service.mark_attendance(
