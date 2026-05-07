@@ -59,7 +59,7 @@ class FacePredictor:
         resized = cv2.resize(crop, (self.image_size, self.image_size), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
-        x_input = np.expand_dims(rgb.astype(np.float32) / 255.0, axis=0)
+        x_input = np.expand_dims(rgb.astype(np.float32), axis=0)
         probs = self.model.predict(x_input, verbose=0)[0]
         pred_idx = int(np.argmax(probs))
         confidence = float(probs[pred_idx])
