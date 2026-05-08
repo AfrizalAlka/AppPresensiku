@@ -68,9 +68,14 @@ class AppConfig:
     student_class_column: str
     attendance_table: str
 
+    # Attendance settings
+    attendance_cutoff_hour: int
+    attendance_cutoff_minute: int
+
     # Laravel storage config
     laravel_url: str
     laravel_storage_path: str
+    laravel_attendance_pictures_path: str
 
     @staticmethod
     def from_env() -> "AppConfig":
@@ -113,4 +118,7 @@ class AppConfig:
             attendance_table=os.getenv("ATTENDANCE_TABLE", "attendance_history_dailys"),
             laravel_url=os.getenv("APP_URL", "http://localhost:8000"),
             laravel_storage_path=os.getenv("LARAVEL_STORAGE_PATH", "photo-webcam"),
+            laravel_attendance_pictures_path=os.getenv("LARAVEL_ATTENDANCE_PICTURES_PATH", "daily_attendance_pictures"),
+            attendance_cutoff_hour=_env_int("ATTENDANCE_CUTOFF_HOUR", 7),
+            attendance_cutoff_minute=_env_int("ATTENDANCE_CUTOFF_MINUTE", 0),
         )

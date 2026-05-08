@@ -5,15 +5,19 @@ import numpy as np
 from flask import Flask, jsonify, request
 from pathlib import Path
 from datetime import datetime
+import requests
+from io import BytesIO
 
 from config import AppConfig
 from database import Database, DatabaseError
 from services.attendance import AttendanceService
 from services.camera_absensi import CameraAttendanceRunner
+from services.camera_gui import CameraAttendanceGUI
 from services.inference import FacePredictor
 from services.preprocess import preprocess_dataset
 from services.train_cnn import train_model
 from services.fetch_laravel_dataset import LaravelDatasetFetcher
+from services.attendance_utils import calculate_attendance_status, format_attendance_status
 
 
 def _decode_uploaded_image() -> np.ndarray:
@@ -31,21 +35,94 @@ def _decode_uploaded_image() -> np.ndarray:
 
 
 def _save_attendance_picture(frame: np.ndarray, config: AppConfig) -> str:
-	"""Save attendance picture to disk and return filename.
+	"""Save attendance picture to Laravel storage and return filename.
 	
 	Args:
 	- frame: OpenCV image (BGR)
 	- config: App configuration
 	
-	Returns: Filename (e.g., 'attendance_pictures/2026-02-05_14-30-45_123.jpg')
+	Returns: Relative path for database storage 
+	         (e.g., 'daily_attendance_pictures/2026-02-05_14-30-45_123.jpg')
 	"""
+	try:
+		# Generate filename
+		timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+		filename = f"{timestamp}.jpg"
+		
+		# Encode frame to JPG
+		success, jpg_buffer = cv2.imencode(".jpg", frame)
+		if not success:
+			raise ValueError("Gagal encode gambar ke JPG")
+		
+		jpg_bytes = jpg_buffer.tobytes()
+		
+		# Upload to Laravel via API
+		url = f"{config.laravel_url}/api/attendance/upload-picture"
+		
+		files = {"image": (filename, BytesIO(jpg_bytes), "image/jpeg")}
+		data = {"storage_path": config.laravel_attendance_pictures_path}
+		
+		print(f"[UPLOAD] Sending to: {url}")
+		print(f"[UPLOAD] Storage path: {config.laravel_attendance_pictures_path}")
+		print(f"[UPLOAD] Filename: {filename}")
+		
+		response = requests.post(url, files=files, data=data, timeout=10)
+		
+		print(f"[UPLOAD] Response status: {response.status_code}")
+		print(f"[UPLOAD] Response headers: {response.headers}")
+		print(f"[UPLOAD] Response body (first 500 chars): {response.text[:500]}")
+		
+		if response.status_code == 200:
+			try:
+				result = response.json()
+				print(f"[UPLOAD] Response JSON: {result}")
+				uploaded_path = result.get("path", f"{config.laravel_attendance_pictures_path}/{filename}")
+				print(f"[UPLOAD] Success! Path: {uploaded_path}")
+				return uploaded_path
+			except Exception as json_error:
+				print(f"[UPLOAD] JSON parse error: {str(json_error)}")
+				print(f"[UPLOAD] Fallback to local storage")
+				return _save_attendance_picture_locally(frame, config, filename)
+		else:
+			# Log error response
+			print(f"[UPLOAD] Error response: {response.text}")
+			print(f"[UPLOAD] Fallback to local storage")
+			return _save_attendance_picture_locally(frame, config, filename)
+			
+	except requests.exceptions.ConnectionError as e:
+		print(f"[UPLOAD] Connection error to Laravel: {str(e)}")
+		print(f"[UPLOAD] Fallback to local storage")
+		timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+		filename = f"{timestamp}.jpg"
+		return _save_attendance_picture_locally(frame, config, filename)
+	except Exception as e:
+		print(f"[UPLOAD] Unexpected error: {str(e)}")
+		print(f"[UPLOAD] Fallback to local storage")
+		timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+		filename = f"{timestamp}.jpg"
+		return _save_attendance_picture_locally(frame, config, filename)
+
+
+def _save_attendance_picture_locally(
+	frame: np.ndarray, config: AppConfig, filename: str = None
+) -> str:
+	"""Fallback: Save attendance picture to local disk.
+	
+	Args:
+	- frame: OpenCV image (BGR)
+	- config: App configuration
+	- filename: Optional filename (default: timestamp)
+	
+	Returns: Relative path (e.g., 'attendance_pictures/2026-02-05_14-30-45_123.jpg')
+	"""
+	if filename is None:
+		timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+		filename = f"{timestamp}.jpg"
+	
 	picture_dir = config.project_root / "attendance_pictures"
 	picture_dir.mkdir(exist_ok=True)
 	
-	timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
-	filename = f"{timestamp}.jpg"
 	filepath = picture_dir / filename
-	
 	cv2.imwrite(str(filepath), frame)
 	
 	# Return relative path for database storage
@@ -84,6 +161,7 @@ def create_app() -> Flask:
 	)
 	attendance_service = AttendanceService(db)
 	camera_runner = CameraAttendanceRunner(config, predictor, attendance_service)
+	camera_gui_runner = CameraAttendanceGUI(config, predictor, attendance_service)
 
 	@app.get("/health")
 	def health():
@@ -179,6 +257,13 @@ def create_app() -> Flask:
 			}
 			return jsonify(unknown_response), 200
 
+		# Calculate attendance status (tepat_waktu or terlambat)
+		# Batas masuk berdasarkan config (default: jam 7:00)
+		attendance_status = calculate_attendance_status(
+			cutoff_hour=config.attendance_cutoff_hour,
+			cutoff_minute=config.attendance_cutoff_minute,
+		)
+
 		# Save the picture
 		picture_filename = _save_attendance_picture(frame, config)
 
@@ -187,6 +272,7 @@ def create_app() -> Flask:
 			confidence=prediction.confidence,
 			source="upload",
 			picture_filename=picture_filename,
+			status=attendance_status,
 		)
 
 		return jsonify(
@@ -199,19 +285,53 @@ def create_app() -> Flask:
 				"attendance_id": attendance.attendance_id,
 				"student_id": attendance.student_id,
 				"class_id": attendance.class_id,
+				"attendance_status": attendance_status,
+				"attendance_status_display": format_attendance_status(attendance_status),
 				"picture": picture_filename,
 			}
 		)
 
 	@app.post("/attendance/camera/start")
 	def start_camera_attendance():
-		camera_runner.start()
-		return jsonify({"status": "started"})
+		"""Start camera attendance.
+		
+		Query Parameters:
+		- gui (bool, optional): Enable GUI display (default: false)
+		
+		Examples:
+		  POST /attendance/camera/start  (no GUI)
+		  POST /attendance/camera/start?gui=true  (with GUI)
+		  POST /attendance/camera/start?gui=1  (with GUI)
+		"""
+		gui_enabled = request.args.get('gui', 'false').lower() in {'true', '1', 'yes'}
+		
+		if gui_enabled:
+			try:
+				camera_gui_runner.start()
+				return jsonify({
+					"status": "started",
+					"mode": "gui",
+					"message": "Camera attendance dimulai dengan GUI"
+				})
+			except Exception as e:
+				return jsonify({
+					"status": "error",
+					"message": f"Error starting camera GUI: {str(e)}"
+				}), 500
+		else:
+			camera_runner.start()
+			return jsonify({
+				"status": "started",
+				"mode": "background",
+				"message": "Camera attendance dimulai (background mode)"
+			})
 
 	@app.post("/attendance/camera/stop")
 	def stop_camera_attendance():
+		"""Stop camera attendance (both GUI and background mode)."""
 		camera_runner.stop()
-		return jsonify({"status": "stopped"})
+		camera_gui_runner.stop()
+		return jsonify({"status": "stopped", "message": "Camera attendance dihentikan"})
 
 	@app.get("/attendance/camera/status")
 	def camera_status():
