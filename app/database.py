@@ -55,6 +55,27 @@ class Database:
 		finally:
 			conn.close()
 
+	def fetch_all(self, query: str, params: tuple = ()) -> list:
+		"""Execute a query and fetch all results.
+		
+		Args:
+			query: SQL query string
+			params: Query parameters (for parameterized queries)
+		
+		Returns: List of tuples (for sqlite) or list of dicts (for mysql)
+		"""
+		if self.driver == "sqlite":
+			with self.connection() as conn:
+				rows = conn.execute(query, params).fetchall()
+				return rows or []
+		
+		with self.connection() as conn:
+			cur = conn.cursor(dictionary=True)
+			cur.execute(query, params)
+			rows = cur.fetchall()
+			cur.close()
+			return rows or []
+
 	def find_student_by_name(self, recognized_name: str) -> Optional[Dict[str, Any]]:
 		"""Find student by name from Laravel students table.
 		

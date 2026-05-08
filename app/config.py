@@ -68,6 +68,10 @@ class AppConfig:
     student_class_column: str
     attendance_table: str
 
+    # Laravel storage config
+    laravel_url: str
+    laravel_storage_path: str
+
     @staticmethod
     def from_env() -> "AppConfig":
         project_root = Path(__file__).resolve().parents[1]
@@ -107,4 +111,6 @@ class AppConfig:
             student_name_column=os.getenv("STUDENT_NAME_COLUMN", "name"),
             student_class_column=os.getenv("STUDENT_CLASS_COLUMN", "id_class"),
             attendance_table=os.getenv("ATTENDANCE_TABLE", "attendance_history_dailys"),
+            laravel_url=os.getenv("APP_URL", "http://localhost:8000"),
+            laravel_storage_path=os.getenv("LARAVEL_STORAGE_PATH", "photo-webcam"),
         )
