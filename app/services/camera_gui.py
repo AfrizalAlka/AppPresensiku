@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+import requests
+from io import BytesIO
 
 from config import AppConfig
 from services.inference import FacePredictor
@@ -311,16 +313,50 @@ class CameraAttendanceGUI:
         return frame
 
     def _save_camera_frame(self, frame: cv2.Mat) -> str:
-        """Save camera frame to disk.
+        """Save camera frame to Laravel storage or local disk.
         
         Returns: Relative path
         """
+        try:
+            # Generate filename
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+            filename = f"camera_{timestamp}.jpg"
+            
+            # Encode frame to JPG
+            success, jpg_buffer = cv2.imencode(".jpg", frame)
+            if not success:
+                raise ValueError("Gagal encode gambar")
+            
+            jpg_bytes = jpg_buffer.tobytes()
+            
+            # Upload to Laravel via API
+            url = f"{self.config.laravel_url}/api/attendance/upload-picture"
+            
+            files = {"image": (filename, BytesIO(jpg_bytes), "image/jpeg")}
+            data = {"storage_path": self.config.laravel_attendance_pictures_path}
+            
+            response = requests.post(url, files=files, data=data, timeout=10)
+            
+            if response.status_code == 200:
+                result = response.json()
+                return result.get("path", f"{self.config.laravel_attendance_pictures_path}/{filename}")
+            else:
+                # Fallback to local
+                return self._save_camera_frame_locally(frame, filename)
+        
+        except Exception as e:
+            # Fallback to local
+            return self._save_camera_frame_locally(frame)
+    
+    def _save_camera_frame_locally(self, frame: cv2.Mat, filename: str = None) -> str:
+        """Fallback: Save camera frame to local disk."""
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+            filename = f"camera_{timestamp}.jpg"
+        
         picture_dir = self.config.project_root / "attendance_pictures"
         picture_dir.mkdir(exist_ok=True)
         
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
-        filename = f"camera_{timestamp}.jpg"
         filepath = picture_dir / filename
-        
         cv2.imwrite(str(filepath), frame)
         return f"attendance_pictures/{filename}"

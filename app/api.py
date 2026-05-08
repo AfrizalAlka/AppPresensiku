@@ -62,18 +62,42 @@ def _save_attendance_picture(frame: np.ndarray, config: AppConfig) -> str:
 		files = {"image": (filename, BytesIO(jpg_bytes), "image/jpeg")}
 		data = {"storage_path": config.laravel_attendance_pictures_path}
 		
+		print(f"[UPLOAD] Sending to: {url}")
+		print(f"[UPLOAD] Storage path: {config.laravel_attendance_pictures_path}")
+		print(f"[UPLOAD] Filename: {filename}")
+		
 		response = requests.post(url, files=files, data=data, timeout=10)
 		
+		print(f"[UPLOAD] Response status: {response.status_code}")
+		print(f"[UPLOAD] Response headers: {response.headers}")
+		print(f"[UPLOAD] Response body (first 500 chars): {response.text[:500]}")
+		
 		if response.status_code == 200:
-			result = response.json()
-			return result.get("path", f"{config.laravel_attendance_pictures_path}/{filename}")
+			try:
+				result = response.json()
+				print(f"[UPLOAD] Response JSON: {result}")
+				uploaded_path = result.get("path", f"{config.laravel_attendance_pictures_path}/{filename}")
+				print(f"[UPLOAD] Success! Path: {uploaded_path}")
+				return uploaded_path
+			except Exception as json_error:
+				print(f"[UPLOAD] JSON parse error: {str(json_error)}")
+				print(f"[UPLOAD] Fallback to local storage")
+				return _save_attendance_picture_locally(frame, config, filename)
 		else:
-			# Fallback: save locally if Laravel endpoint fails
-			print(f"Laravel upload failed: {response.status_code}, fallback to local storage")
+			# Log error response
+			print(f"[UPLOAD] Error response: {response.text}")
+			print(f"[UPLOAD] Fallback to local storage")
 			return _save_attendance_picture_locally(frame, config, filename)
 			
+	except requests.exceptions.ConnectionError as e:
+		print(f"[UPLOAD] Connection error to Laravel: {str(e)}")
+		print(f"[UPLOAD] Fallback to local storage")
+		timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
+		filename = f"{timestamp}.jpg"
+		return _save_attendance_picture_locally(frame, config, filename)
 	except Exception as e:
-		print(f"Error uploading to Laravel: {str(e)}, fallback to local storage")
+		print(f"[UPLOAD] Unexpected error: {str(e)}")
+		print(f"[UPLOAD] Fallback to local storage")
 		timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S-%f")[:-3]
 		filename = f"{timestamp}.jpg"
 		return _save_attendance_picture_locally(frame, config, filename)
