@@ -13,6 +13,7 @@ from services.camera_absensi import CameraAttendanceRunner
 from services.inference import FacePredictor
 from services.preprocess import preprocess_dataset
 from services.train_cnn import train_model
+from services.fetch_laravel_dataset import LaravelDatasetFetcher
 
 
 def _decode_uploaded_image() -> np.ndarray:
@@ -56,6 +57,7 @@ def _read_pipeline_options(config: AppConfig) -> dict:
 	payload = request.get_json(silent=True) or {}
 
 	return {
+		"fetch_from_laravel": bool(payload.get("fetch_from_laravel", False)),
 		"run_preprocess": bool(payload.get("preprocess", True)),
 		"run_train": bool(payload.get("train", True)),
 		"overwrite": bool(payload.get("overwrite", False)),
@@ -97,6 +99,41 @@ def create_app() -> Flask:
 		options = _read_pipeline_options(config)
 
 		results = {}
+		
+		# Fetch dataset from Laravel if requested
+		if options["fetch_from_laravel"]:
+			try:
+				fetcher = LaravelDatasetFetcher(
+					db=db,
+					laravel_url=config.laravel_url,
+					storage_path=config.laravel_storage_path,
+				)
+				fetch_result = fetcher.fetch_and_organize(
+					output_dir=config.raw_dir,
+					overwrite=options["overwrite"],
+				)
+				results["fetch_laravel"] = fetch_result
+				
+				if not fetch_result["success"]:
+					return jsonify({
+						"status": "error",
+						"message": "Gagal fetch dataset dari Laravel",
+						"details": fetch_result,
+					}), 400
+				
+				# Cleanup and reorganize
+				cleanup_result = fetcher.cleanup_and_reorganize(
+					dataset_dir=config.raw_dir,
+					target_size=(config.image_size, config.image_size),
+				)
+				results["cleanup"] = cleanup_result
+				
+			except Exception as e:
+				return jsonify({
+					"status": "error",
+					"message": f"Error fetch dari Laravel: {str(e)}",
+				}), 500
+		
 		if options["run_preprocess"]:
 			results["preprocess"] = preprocess_dataset(
 				source_dir=config.raw_dir,
@@ -195,6 +232,52 @@ def create_app() -> Flask:
 	@app.errorhandler(ValueError)
 	def handle_value_error(err):
 		return jsonify({"error": str(err)}), 400
+
+	
+	@app.post("/dataset/fetch-from-laravel")
+	def fetch_dataset_from_laravel():
+		"""Fetch student photos from Laravel storage and organize into dataset."""
+		try:
+			payload = request.get_json(silent=True) or {}
+			overwrite = bool(payload.get("overwrite", False))
+			
+			fetcher = LaravelDatasetFetcher(
+				db=db,
+				laravel_url=config.laravel_url,
+				storage_path=config.laravel_storage_path,
+			)
+			
+			# Fetch and organize
+			fetch_result = fetcher.fetch_and_organize(
+				output_dir=config.raw_dir,
+				overwrite=overwrite,
+			)
+			
+			if not fetch_result["success"]:
+				return jsonify({
+					"status": "error",
+					"message": "Gagal fetch dataset dari Laravel",
+					"details": fetch_result,
+				}), 400
+			
+			# Cleanup and reorganize images
+			cleanup_result = fetcher.cleanup_and_reorganize(
+				dataset_dir=config.raw_dir,
+				target_size=(config.image_size, config.image_size),
+			)
+			
+			return jsonify({
+				"status": "success",
+				"message": "Dataset berhasil di-fetch dari Laravel",
+				"fetch_result": fetch_result,
+				"cleanup_result": cleanup_result,
+			}), 200
+			
+		except Exception as e:
+			return jsonify({
+				"status": "error",
+				"message": f"Error fetch dataset: {str(e)}",
+			}), 500
 
 	@app.errorhandler(FileNotFoundError)
 	def handle_not_found(err):
