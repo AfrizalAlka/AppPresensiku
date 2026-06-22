@@ -12,7 +12,6 @@ from config import AppConfig
 from database import Database, DatabaseError
 from services.attendance import AttendanceService
 from services.camera_absensi import CameraAttendanceRunner
-from services.camera_gui import CameraAttendanceGUI
 from services.inference import FacePredictor
 from services.preprocess import preprocess_dataset
 from services.train_cnn import train_model
@@ -161,7 +160,6 @@ def create_app() -> Flask:
 	)
 	attendance_service = AttendanceService(db)
 	camera_runner = CameraAttendanceRunner(config, predictor, attendance_service)
-	camera_gui_runner = CameraAttendanceGUI(config, predictor, attendance_service)
 
 	@app.get("/health")
 	def health():
@@ -293,44 +291,18 @@ def create_app() -> Flask:
 
 	@app.post("/attendance/camera/start")
 	def start_camera_attendance():
-		"""Start camera attendance.
-		
-		Query Parameters:
-		- gui (bool, optional): Enable GUI display (default: false)
-		
-		Examples:
-		  POST /attendance/camera/start  (no GUI)
-		  POST /attendance/camera/start?gui=true  (with GUI)
-		  POST /attendance/camera/start?gui=1  (with GUI)
-		"""
-		gui_enabled = request.args.get('gui', 'false').lower() in {'true', '1', 'yes'}
-		
-		if gui_enabled:
-			try:
-				camera_gui_runner.start()
-				return jsonify({
-					"status": "started",
-					"mode": "gui",
-					"message": "Camera attendance dimulai dengan GUI"
-				})
-			except Exception as e:
-				return jsonify({
-					"status": "error",
-					"message": f"Error starting camera GUI: {str(e)}"
-				}), 500
-		else:
-			camera_runner.start()
-			return jsonify({
-				"status": "started",
-				"mode": "background",
-				"message": "Camera attendance dimulai (background mode)"
-			})
+		"""Start camera attendance (background mode)."""
+		camera_runner.start()
+		return jsonify({
+			"status": "started",
+			"mode": "background",
+			"message": "Camera attendance dimulai (background mode)"
+		})
 
 	@app.post("/attendance/camera/stop")
 	def stop_camera_attendance():
-		"""Stop camera attendance (both GUI and background mode)."""
+		"""Stop camera attendance."""
 		camera_runner.stop()
-		camera_gui_runner.stop()
 		return jsonify({"status": "stopped", "message": "Camera attendance dihentikan"})
 
 	@app.get("/attendance/camera/status")
