@@ -1,6 +1,30 @@
-flask==3.1.0
+# Core web framework
+Flask==3.0.3
+
+# Computer Vision
+opencv-python==4.9.0.80
 numpy==1.26.4
-opencv-python==4.10.0.84
-tensorflow==2.17.1
+
+# Deep Learning
+tensorflow==2.15.0
+
+# Machine Learning utilities
+scikit-learn==1.5.1
+
+# Data visualization (used in train_cnn.py)
+matplotlib==3.9.2
+seaborn==0.13.2
+
+# Image processing & background removal (used in preprocess.py)
+rembg==2.0.69
+Pillow==10.4.0
+
+# HTTP requests (used in fetch_laravel_dataset.py & api.py)
+requests==2.32.3
+
+# Database connector
 mysql-connector-python==9.1.0
-python-dotenv==1.0.0
+
+# Environment variables
+python-dotenv==1.0.1
+
