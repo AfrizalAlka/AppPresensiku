@@ -317,6 +317,38 @@ def create_app() -> Flask:
 			}
 		)
 
+	@app.route('/tes-konek', methods=['GET'])
+	def test_db_connection():
+		try:
+			# Mengetes koneksi menggunakan context manager with db.connection() bawaan kodemu
+			with db.connection() as conn:
+				# Kita buat cursor untuk ngetes query basic
+				if db.driver == "mysql":
+					cur = conn.cursor()
+					cur.execute("SELECT VERSION();")
+					version = cur.fetchone()
+					cur.close()
+					db_version = version[0]
+				else:
+					# Jika sewaktu-waktu beralih ke sqlite
+					row = conn.execute("SELECT sqlite_version();").fetchone()
+					db_version = row[0]
+
+			return jsonify({
+				"status": "success",
+				"message": f"Gokil! Flask faceapi berhasil konek ke database {db.driver} Shared Hosting!",
+				"database_version": db_version,
+				"target_table_student": config.student_table
+			}), 200
+
+		except Exception as e:
+			# Jika gagal handshake (IP diblokir, password keliru, dsb)
+			return jsonify({
+				"status": "error",
+				"message": "Aduh, gagal konek ke database shared hosting!",
+				"error_detail": str(e)
+			}), 500
+
 	@app.errorhandler(DatabaseError)
 	def handle_db_error(err):
 		return jsonify({"error": str(err)}), 500

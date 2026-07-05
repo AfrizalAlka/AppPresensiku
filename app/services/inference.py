@@ -41,7 +41,9 @@ class FacePredictor:
 
     def detect_largest_face(self, frame_bgr: np.ndarray) -> Optional[tuple[int, int, int, int]]:
         gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        faces = self.face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+        faces = self.face_cascade.detectMultiScale(
+            gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40)
+        )
         if len(faces) == 0:
             return None
         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
@@ -56,10 +58,15 @@ class FacePredictor:
 
         x, y, w, h = face_box
         crop = frame_bgr[y : y + h, x : x + w]
+
+        # Pipeline must match the training preprocessing (no background removal).
+        # Resize → convert to RGB → scale to [-1, 1] (MobileNetV2 requirement).
         resized = cv2.resize(crop, (self.image_size, self.image_size), interpolation=cv2.INTER_AREA)
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
         x_input = np.expand_dims(rgb.astype(np.float32), axis=0)
+        # MobileNetV2 preprocessing: scales pixel values from [0, 255] to [-1, 1]
+        x_input = tf.keras.applications.mobilenet_v2.preprocess_input(x_input)
         probs = self.model.predict(x_input, verbose=0)[0]
         pred_idx = int(np.argmax(probs))
         confidence = float(probs[pred_idx])
