@@ -1,4 +1,4 @@
-# Core web framework
+﻿# Core web framework
 Flask==3.0.3
 
 # Computer Vision
@@ -15,10 +15,6 @@ scikit-learn==1.5.1
 matplotlib==3.9.2
 seaborn==0.13.2
 
-# Image processing & background removal (used in preprocess.py)
-rembg==2.0.69
-Pillow==10.4.0
-
 # HTTP requests (used in fetch_laravel_dataset.py & api.py)
 requests==2.32.3
 
@@ -27,5 +23,3 @@ mysql-connector-python==9.1.0
 
 # Environment variables
 python-dotenv==1.0.1
-
-onnxruntime>=1.17.0
