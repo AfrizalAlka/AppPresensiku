@@ -28,3 +28,4 @@ mysql-connector-python==9.1.0
 # Environment variables
 python-dotenv==1.0.1
 
+onnxruntime>=1.17.0

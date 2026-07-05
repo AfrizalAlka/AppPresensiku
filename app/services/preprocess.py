@@ -1,16 +1,13 @@
-"""Preprocess face images by cropping, removing background, resizing, and augmenting them."""
+"""Preprocess face images by detecting, cropping, resizing, and augmenting them."""
 
 import argparse
 import random
 import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
-from rembg import remove as rembg_remove
-from PIL import Image
-import io
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
@@ -25,71 +22,30 @@ def _collect_image_files(root_dir: Path) -> List[Path]:
 	return sorted(p for p in root_dir.rglob("*") if p.is_file() and p.suffix.lower() in VALID_EXTENSIONS)
 
 
-def center_crop_face(image_bgr: np.ndarray, crop_ratio: float = 0.7) -> np.ndarray:
-    """Crop the center portion of the image where the face is assumed to be located.
-
-    Args:
-        image_bgr: Input image in BGR format.
-        crop_ratio: Fraction of the shorter dimension to use as crop size (default 0.7).
-
-    Returns:
-        Cropped image in BGR format.
-    """
-    h, w = image_bgr.shape[:2]
-    crop_size = int(min(h, w) * crop_ratio)
-    cx, cy = w // 2, h // 2
-    x1 = max(0, cx - crop_size // 2)
-    y1 = max(0, cy - crop_size // 2)
-    x2 = min(w, x1 + crop_size)
-    y2 = min(h, y1 + crop_size)
-    return image_bgr[y1:y2, x1:x2]
+def load_face_cascade() -> cv2.CascadeClassifier:
+    """Load the built-in Haar cascade for face detection."""
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    face_cascade = cv2.CascadeClassifier(cascade_path)
+    if face_cascade.empty():
+        raise RuntimeError("Gagal memuat Haar Cascade untuk deteksi wajah.")
+    return face_cascade
 
 
-def remove_background(image_bgr: np.ndarray) -> np.ndarray:
-    """Remove the background from a face image using rembg.
-
-    The output is a 3-channel BGR image where the removed background is
-    replaced with white pixels so downstream JPEG encoding works correctly.
-
-    Args:
-        image_bgr: Input image in BGR format (uint8).
-
-    Returns:
-        BGR image with background replaced by white (uint8).
-    """
-    # Convert BGR → RGB PIL image
-    image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(image_rgb)
-
-    # Run rembg (returns RGBA PIL image)
-    buf_in = io.BytesIO()
-    pil_img.save(buf_in, format="PNG")
-    buf_in.seek(0)
-
-    result_bytes = rembg_remove(buf_in.read())
-    result_pil = Image.open(io.BytesIO(result_bytes)).convert("RGBA")
-
-    # Composite onto white background
-    white_bg = Image.new("RGBA", result_pil.size, (255, 255, 255, 255))
-    white_bg.paste(result_pil, mask=result_pil.split()[3])  # alpha channel as mask
-    result_rgb = white_bg.convert("RGB")
-
-    # Convert RGB → BGR
-    result_bgr = cv2.cvtColor(np.array(result_rgb), cv2.COLOR_RGB2BGR)
-    return result_bgr
+def detect_largest_face(image_bgr: np.ndarray, face_cascade: cv2.CascadeClassifier) -> Optional[Tuple[int, int, int, int]]:
+    """Find the biggest face box in one image."""
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+    if len(faces) == 0:
+        return None
+    x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
+    return int(x), int(y), int(w), int(h)
 
 
-def resize_image(image_bgr: np.ndarray, target_size: int) -> np.ndarray:
-    """Resize image to a square target size.
-
-    Args:
-        image_bgr: Input image in BGR format.
-        target_size: Side length in pixels for the output square image.
-
-    Returns:
-        Resized BGR image.
-    """
-    return cv2.resize(image_bgr, (target_size, target_size), interpolation=cv2.INTER_AREA)
+def crop_and_resize(image_bgr: np.ndarray, face_box: Tuple[int, int, int, int], target_size: int) -> np.ndarray:
+    """Crop the face area and resize it to the model input size."""
+    x, y, w, h = face_box
+    face_crop = image_bgr[y : y + h, x : x + w]
+    return cv2.resize(face_crop, (target_size, target_size), interpolation=cv2.INTER_AREA)
 
 
 def random_augment(color_img: np.ndarray, rng: random.Random) -> np.ndarray:
@@ -140,28 +96,8 @@ def preprocess_dataset(
     min_images_per_class: int,
     seed: int,
     overwrite: bool = False,
-    crop_ratio: float = 0.7,
 ) -> Dict[str, int]:
-	"""Process every class folder: center-crop → remove background → resize → augment.
-
-	Pipeline order per image:
-	  1. Center crop  – extract central face region
-	  2. Remove background – isolate face with white background via rembg
-	  3. Resize – scale to target_size × target_size
-	  4. Augmentation – generate synthetic variants to meet min_images_per_class
-
-	Args:
-	    source_dir: Root folder containing one sub-folder per class.
-	    output_dir: Destination folder for preprocessed images.
-	    target_size: Output image side length in pixels.
-	    min_images_per_class: Minimum images per class (augmented if needed).
-	    seed: Random seed for reproducible augmentation.
-	    overwrite: Currently unused; output_dir is always rebuilt from scratch.
-	    crop_ratio: Fraction of the shorter dimension used for center crop (default 0.7).
-
-	Returns:
-	    Dictionary with keys: class_count, processed, skipped, generated, total_output.
-	"""
+	"""Process every class folder and save cleaned plus augmented images."""
 	if not source_dir.is_dir():
 		raise FileNotFoundError(f"Folder sumber tidak ditemukan: {source_dir}")
 
@@ -175,14 +111,9 @@ def preprocess_dataset(
 		shutil.rmtree(output_dir)
 	output_dir.mkdir(parents=True, exist_ok=True)
 
+	face_cascade = load_face_cascade()
 	rng = random.Random(seed)
-	stats: Dict[str, int] = {
-	    "class_count": len(class_dirs),
-	    "processed": 0,
-	    "skipped": 0,
-	    "generated": 0,
-	    "total_output": 0,
-	}
+	stats = {"class_count": len(class_dirs), "processed": 0, "skipped": 0, "generated": 0, "total_output": 0}
 
 	for class_dir in class_dirs:
 		image_files = _collect_image_files(class_dir)
@@ -197,41 +128,30 @@ def preprocess_dataset(
 		for index, src_path in enumerate(image_files, start=1):
 			image = cv2.imread(str(src_path), cv2.IMREAD_COLOR)
 			if image is None:
-				print(f"  [SKIP] Gagal membaca: {src_path.name}")
 				stats["skipped"] += 1
 				continue
 
-			# Step 1: Center crop
-			cropped = center_crop_face(image, crop_ratio=crop_ratio)
+			face_box = detect_largest_face(image, face_cascade)
+			if face_box is None:
+				stats["skipped"] += 1
+				continue
 
-			# Step 2: Remove background
-			try:
-				no_bg = remove_background(cropped)
-			except Exception as exc:
-				print(f"  [WARN] rembg gagal untuk {src_path.name}: {exc} – menggunakan gambar asli")
-				no_bg = cropped
-
-			# Step 3: Resize
-			resized = resize_image(no_bg, target_size)
-
-			# Save original processed image
+			resized = crop_and_resize(image, face_box, target_size)
 			output_path = class_output_dir / f"orig_{index:04d}.jpg"
 			if cv2.imwrite(str(output_path), resized):
 				stats["processed"] += 1
 				clean_images.append(resized)
 			else:
-				print(f"  [SKIP] Gagal menulis: {output_path.name}")
 				stats["skipped"] += 1
 
 		if not clean_images:
 			continue
 
-		# Step 4: Augmentation – fill up to min_images_per_class
 		needed_images = max(0, min_images_per_class - len(clean_images))
-		for aug_index in range(needed_images):
-			base_image = clean_images[aug_index % len(clean_images)]
+		for index in range(needed_images):
+			base_image = clean_images[index % len(clean_images)]
 			augmented_image = random_augment(base_image, rng)
-			augmented_path = class_output_dir / f"aug_{aug_index + 1:04d}.jpg"
+			augmented_path = class_output_dir / f"aug_{index + 1:04d}.jpg"
 			if cv2.imwrite(str(augmented_path), augmented_image):
 				stats["generated"] += 1
 
@@ -240,14 +160,13 @@ def preprocess_dataset(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Preprocess dataset: center-crop, remove background, resize, augment.")
+    parser = argparse.ArgumentParser(description="Preprocess dataset: detect, crop, resize, augment.")
     parser.add_argument("--source", type=str, default="dataset/Dataset_Raw")
     parser.add_argument("--output", type=str, default="dataset/Dataset_Preprocessed")
     parser.add_argument("--size", type=int, default=224)
     parser.add_argument("--min_images", type=int, default=30)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--overwrite", action="store_true")
-    parser.add_argument("--crop_ratio", type=float, default=0.7, help="Fraction of shorter dimension for center crop (default: 0.7)")
     args = parser.parse_args()
 
     stats = preprocess_dataset(
@@ -257,7 +176,6 @@ def main() -> None:
         min_images_per_class=args.min_images,
         seed=args.seed,
         overwrite=args.overwrite,
-        crop_ratio=args.crop_ratio,
     )
     print(stats)
 
