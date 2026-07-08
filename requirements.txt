@@ -23,3 +23,6 @@ mysql-connector-python==9.1.0
 
 # Environment variables
 python-dotenv==1.0.1
+
+# Background removal
+rembg==2.0.69
