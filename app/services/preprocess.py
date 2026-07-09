@@ -66,12 +66,13 @@ def remove_background(image_bgr: np.ndarray, bg_color: Tuple[int, int, int] = (2
     if rgba is None or rgba.shape[2] != 4:
         return image_bgr  # fall back if decoding fails
 
-    # Composite: fill the background with *bg_color* then paint the foreground
+    # cv2.imdecode returns BGR data even for RGBA PNGs (channels: B, G, R, A)
+    # So we treat the first 3 channels as BGR directly — no further conversion needed.
     alpha = rgba[:, :, 3:4].astype(np.float32) / 255.0
-    rgb = rgba[:, :, :3].astype(np.float32)
-    background = np.full_like(rgb, fill_value=bg_color[::-1], dtype=np.float32)  # RGB fill
-    composited = (rgb * alpha + background * (1.0 - alpha)).astype(np.uint8)
-    return cv2.cvtColor(composited, cv2.COLOR_RGB2BGR)
+    bgr = rgba[:, :, :3].astype(np.float32)
+    background = np.full_like(bgr, fill_value=bg_color, dtype=np.float32)  # already BGR
+    composited = (bgr * alpha + background * (1.0 - alpha)).astype(np.uint8)
+    return composited
 
 
 def crop_and_resize(image_bgr: np.ndarray, face_box: Tuple[int, int, int, int], target_size: int) -> np.ndarray:
