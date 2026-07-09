@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+from rembg import remove as rembg_remove
 
 VALID_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
@@ -39,6 +40,39 @@ def detect_largest_face(image_bgr: np.ndarray, face_cascade: cv2.CascadeClassifi
         return None
     x, y, w, h = max(faces, key=lambda face: face[2] * face[3])
     return int(x), int(y), int(w), int(h)
+
+
+def remove_background(image_bgr: np.ndarray, bg_color: Tuple[int, int, int] = (255, 255, 255)) -> np.ndarray:
+    """Remove the background from a BGR image using rembg and composite onto a solid colour.
+
+    Args:
+        image_bgr: Input image in BGR format (as returned by cv2.imread).
+        bg_color:  Background fill colour in BGR order. Defaults to white.
+
+    Returns:
+        BGR image with background replaced by *bg_color*.
+    """
+    # rembg expects PNG bytes; encode the BGR frame to PNG in-memory
+    success, encoded = cv2.imencode(".png", image_bgr)
+    if not success:
+        return image_bgr  # fall back to original if encoding fails
+
+    png_bytes = encoded.tobytes()
+    result_bytes = rembg_remove(png_bytes)  # returns RGBA PNG bytes
+
+    # Decode the RGBA result
+    result_array = np.frombuffer(result_bytes, dtype=np.uint8)
+    rgba = cv2.imdecode(result_array, cv2.IMREAD_UNCHANGED)
+    if rgba is None or rgba.shape[2] != 4:
+        return image_bgr  # fall back if decoding fails
+
+    # cv2.imdecode returns BGR data even for RGBA PNGs (channels: B, G, R, A)
+    # So we treat the first 3 channels as BGR directly — no further conversion needed.
+    alpha = rgba[:, :, 3:4].astype(np.float32) / 255.0
+    bgr = rgba[:, :, :3].astype(np.float32)
+    background = np.full_like(bgr, fill_value=bg_color, dtype=np.float32)  # already BGR
+    composited = (bgr * alpha + background * (1.0 - alpha)).astype(np.uint8)
+    return composited
 
 
 def crop_and_resize(image_bgr: np.ndarray, face_box: Tuple[int, int, int, int], target_size: int) -> np.ndarray:
@@ -131,11 +165,16 @@ def preprocess_dataset(
 				stats["skipped"] += 1
 				continue
 
+			# Step 1 – remove background
+			image = remove_background(image)
+
+			# Step 2 – detect the largest face on the clean image
 			face_box = detect_largest_face(image, face_cascade)
 			if face_box is None:
 				stats["skipped"] += 1
 				continue
 
+			# Step 3 – crop and resize
 			resized = crop_and_resize(image, face_box, target_size)
 			output_path = class_output_dir / f"orig_{index:04d}.jpg"
 			if cv2.imwrite(str(output_path), resized):
